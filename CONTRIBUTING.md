@@ -19,7 +19,6 @@ the bottom of the Settings & About page).
   see `_check_connection`, `_push_data` and the `check_update` handler.
 - `scripts/check_version.py` - checks the plugin's version numbers agree.
 - `assets/` - logo, banner and screenshot used in the README.
-- `docs/RELEASING.md` - how releases are cut.
 
 ## Workflow
 
