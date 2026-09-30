@@ -24,6 +24,8 @@ This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https:/
 
 <p align="center">
   <img src="assets/spoolio-cards.png" alt="Spoolio spool cards" width="220">
+  <img src="assets/spoolio-cart.png" alt="Spoolio low-stock reorder cart" width="220">
+  <img src="assets/spoolio-settings.png" alt="Spoolio Settings page" width="220">
 </p>
 
 ## Requirements
