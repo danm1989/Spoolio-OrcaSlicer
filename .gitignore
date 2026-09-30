@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# User settings and logs written by a locally installed plugin
+spoolio_settings.json
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

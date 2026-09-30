@@ -1,0 +1,11 @@
+# Tooling config only - the plugin itself is a single file with PEP 723
+# metadata at the top of plugin/spoolio/spoolio_any.py.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+# The plugin file embeds HTML, CSS and JavaScript as string constants, which
+# contain long lines; Python code itself is kept within 100 columns.
+ignore = ["E501"]

@@ -1,0 +1,49 @@
+name: Release
+
+# Push a tag like v0.1.0 to open a DRAFT GitHub release with the plugin file.
+# Review the draft, then click "Publish release" - that is what triggers the
+# Orca Cloud publish workflow (publish-orcacloud.yml).
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: write
+
+jobs:
+  draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches the plugin version
+        run: python scripts/check_version.py "$GITHUB_REF_NAME"
+
+      - name: Render the Orca Cloud store image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librsvg2-bin
+          rsvg-convert -w 512 -h 512 assets/spoolio-icon.svg \
+            -o spoolio-store-image.png
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          # Only suffixed tags (v1.0.0-rc1) are pre-releases: GitHub's "latest
+          # release" API, used by the plugin's update check, skips pre-releases.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            plugin/spoolio/spoolio_any.py \
+            spoolio-store-image.png \
+            --draft "${flags[@]}" \
+            --title "Spoolio ${GITHUB_REF_NAME}" \
+            --generate-notes
