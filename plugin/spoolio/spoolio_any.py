@@ -6,14 +6,16 @@
 # name = "Spoolio"
 # description = "A Bambu Lab inspired inventory management overview for OrcaSlicer"
 # author = "Dan J Moore"
-# version = "0.1.0"
+# version = "0.2.0"
 # ///
 
 import html
 import json
 import logging
+import os
 import platform
 import re
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -24,8 +26,16 @@ from pathlib import Path
 
 import orca
 
+try:
+    import orca.pages  # noqa: F401
+    HAS_PAGES = True
+except (ImportError, AttributeError):
+    HAS_PAGES = False
+
 PLUGIN_NAME = "Spoolio"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
+# Stamped per operating system by scripts/build.py.
+BUILD_TARGET = "any"
 
 DEFAULT_SPOOLMAN_URL = "http://raspberrypi:7912"
 DEFAULT_LOW_FILAMENT_THRESHOLD = 100  # grams
@@ -42,28 +52,41 @@ LOG_MAX_BYTES = 256 * 1024
 
 REQUEST_TIMEOUT = 5  # seconds
 MAX_QUERY_LENGTH = 200
-REFRESH_INTERVAL_SECONDS = 60
+REFRESH_SECONDS = 60
+FONT_STACK = (
+    'Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "Helvetica Neue", '
+    'Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif'
+)
 MAIN_WINDOW_SIZE = (380, 600)
 SETTINGS_WINDOW_SIZE = (560, 820)
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 
 
-def _data_dir() -> Path:
-    """Folder for settings and the log, inside OrcaSlicer's data folder.
+def _config_root() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 
-    Kept out of the plugin folder so updating or reinstalling the plugin doesn't reset them.
+
+def _data_dir() -> Path:
+    """Settings, log and tab-icon folder, inside OrcaSlicer's data folder.
+
+    Not the plugin folder: updates would reset it, and OrcaSlicer expects that folder to
+    hold only the plugin file.
     """
     for parent in PLUGIN_DIR.parents:
         if parent.name == "OrcaSlicer":
             return parent / "spoolio"
-    return PLUGIN_DIR
+    return _config_root() / "OrcaSlicer" / "spoolio"
 
 
 DATA_DIR = _data_dir()
 SETTINGS_FILE = DATA_DIR / SETTINGS_FILENAME
 LOG_FILE = DATA_DIR / LOG_FILENAME
-# Previous location, still read as a fallback.
+# Where earlier builds kept settings when OrcaSlicer's data folder wasn't found.
 LEGACY_SETTINGS_FILE = PLUGIN_DIR / SETTINGS_FILENAME
 
 log = logging.getLogger("spoolio")
@@ -75,8 +98,8 @@ log.addHandler(logging.NullHandler())
 def setup_logging(path: Path | None = None) -> None:
     if any(isinstance(h, RotatingFileHandler) for h in log.handlers):
         return
+    path = path or LOG_FILE
     try:
-        path = path or LOG_FILE
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(path, maxBytes=LOG_MAX_BYTES, backupCount=1, encoding="utf-8")
     except OSError:
@@ -85,11 +108,22 @@ def setup_logging(path: Path | None = None) -> None:
     log.addHandler(handler)
 
 
+# Started at import so anything that goes wrong while the plugin loads is captured.
+setup_logging()
+log.info(
+    "%s %s (%s build) imported; orca.pages %s",
+    PLUGIN_NAME,
+    PLUGIN_VERSION,
+    BUILD_TARGET,
+    "available" if HAS_PAGES else "not available",
+)
+
+
 _reported = {}
 
 
 def _report(key: str, error: str | None, exc_info: bool = False) -> None:
-    """Log a failure once, then its recovery, so the 60-second internal refresh can't flood the log."""
+    """Log a failure once, then its recovery, so the periodic refresh can't flood the log."""
     if error is None:
         if _reported.pop(key, None) is not None:
             log.info("%s recovered", key)
@@ -128,7 +162,7 @@ def save_settings(settings: dict) -> bool:
         return False
 
 
-def fetch_spools(spoolman_url: str) -> dict:
+def get_spools(spoolman_url: str) -> dict:
     """Return ``{"ok": True, "spools": [...]}`` or ``{"ok": False, "error": "..."}``."""
     url = f"{spoolman_url.rstrip('/')}/api/v1/spool"
     try:
@@ -145,11 +179,11 @@ def fetch_spools(spoolman_url: str) -> dict:
     return {"ok": True, "spools": data}
 
 
-def normalize_url(url: str | None) -> str:
+def clean_url(url: str | None) -> str:
     return (url or "").strip().rstrip("/")
 
 
-def fetch_spoolman_info(spoolman_url: str) -> dict:
+def ping_spoolman(spoolman_url: str) -> dict:
     """Ask Spoolman for its version, which doubles as a connection test.
 
     Returns ``{"ok": True, "version": "..."}`` or ``{"ok": False, "error": "..."}``.
@@ -179,7 +213,7 @@ def is_newer(latest: str, current: str) -> bool:
     return parts(latest) > parts(current)
 
 
-def fetch_latest_release() -> dict:
+def latest_release() -> dict:
     """Return ``{"ok": True, "version": ..., "url": ...}`` or ``{"ok": False, "error": ...}``."""
     request = urllib.request.Request(
         LATEST_RELEASE_API,
@@ -207,6 +241,28 @@ def fetch_latest_release() -> dict:
         return {"ok": True, "version": version, "url": data.get("html_url", "")}
     log.warning("Update check failed: %s", error)
     return {"ok": False, "error": error}
+
+
+def open_url(url: str) -> bool:
+    log.info("Opening %s", url)
+    try:
+        if webbrowser.open(url):
+            return True
+        # webbrowser reports "no browser available" (common on Linux) by returning
+        # False rather than raising.
+        log.warning("No web browser could be launched for %s", url)
+        message = f"No web browser could be launched. Open this address yourself:\n{url}"
+    except Exception as exc:
+        log.exception("Could not open the browser")
+        message = f"Could not open the browser: {exc}"
+    orca.host.ui.message(message, title=PLUGIN_NAME, icon="error")
+    return False
+
+
+def open_search(query: object) -> None:
+    if isinstance(query, str) and query.strip():
+        terms = urllib.parse.quote_plus(query.strip()[:MAX_QUERY_LENGTH])
+        open_url(SEARCH_URL.format(query=terms))
 
 
 LOGO_DATA_URI = (
@@ -246,6 +302,28 @@ LOGO_DATA_URI = (
 
 LOGO_IMG = f'<img class="logo" src="{LOGO_DATA_URI}" alt="">'
 
+# White line-art tab icon: a gauge arc around a wound spool. get_icon() must return the
+# path of an image file; SVG markup or a data: URI shows no icon.
+TAB_ICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" '
+    'fill="none" stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round">'
+    '<path d="M5.636 18.364A9 9 0 1 1 18.364 18.364"/><circle cx="12" cy="12" r="5.5"/>'
+    '<circle cx="12" cy="12" r="2"/>'
+    '</svg>'
+)
+TAB_ICON_FILE = DATA_DIR / "spoolio_tab.svg"
+
+
+def icon_path() -> str:
+    try:
+        if not TAB_ICON_FILE.exists() or TAB_ICON_FILE.read_text(encoding="utf-8") != TAB_ICON_SVG:
+            TAB_ICON_FILE.parent.mkdir(parents=True, exist_ok=True)
+            TAB_ICON_FILE.write_text(TAB_ICON_SVG, encoding="utf-8")
+    except OSError:
+        log.exception("Could not write the tab icon to %s", TAB_ICON_FILE)
+        return ""
+    return str(TAB_ICON_FILE)
+
 
 def _fill(template: str, **values: object) -> str:
     """Substitute ``__NAME__`` placeholders.
@@ -256,7 +334,8 @@ def _fill(template: str, **values: object) -> str:
     return re.sub(r"__([A-Z][A-Z_]*)__", lambda match: str(values[match.group(1)]), template)
 
 
-# Filtering, sorting and grouping run client-side on the last spool list pushed in.
+# The pages and the tab set overscroll-behavior-x: none so a two-finger trackpad swipe
+# can't navigate the embedded browser back or forward, which lands on a blank page.
 MAIN_PAGE_TEMPLATE = """
 <!doctype html>
 <html>
@@ -265,13 +344,14 @@ MAIN_PAGE_TEMPLATE = """
 <link rel="icon" href="__LOGODATA__">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  * { font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  * { font-family: __FONT__; }
+  html { overscroll-behavior-x: none; }
   body { margin: 0; padding: 12px; font-size: 13px; }
-  .header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-  .header .title { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
-  .header img.logo { width: 32px; height: 32px; flex-shrink: 0; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .header .title { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+  .header img.logo { width: 52px; height: 52px; flex-shrink: 0; }
   .header-actions { display: flex; gap: 6px; flex-shrink: 0; }
-  h2 { font-size: 14px; margin: 0; }
+  h2 { font-size: 20px; font-weight: 700; margin: 0; color: var(--orca-fg); }
   #status { color: var(--orca-muted); margin-bottom: 8px; }
   #status.error { color: #d9534f; }
   button {
@@ -280,6 +360,7 @@ MAIN_PAGE_TEMPLATE = """
     background: transparent; color: var(--orca-fg);
   }
   button:hover { border-color: var(--orca-accent); }
+  #settings-btn, .sort-dir { background: var(--orca-accent); color: var(--orca-accent-fg); border-color: var(--orca-accent); }
   .filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
   .filters input, .filters select {
     flex: 1; min-width: 110px; padding: 4px 6px;
@@ -340,7 +421,7 @@ MAIN_PAGE_TEMPLATE = """
     font-size: 14px; font-weight: 700; color: var(--orca-fg);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .spool-weight { font-size: 11px; font-weight: 400; color: var(--orca-fg); flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+  .spool-weight { font-size: 13px; font-weight: 400; color: var(--orca-fg); flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
   .spool-cart {
     display: inline-flex; align-items: center; justify-content: center;
     padding: 2px 4px; cursor: pointer; border-radius: 5px; line-height: 0;
@@ -381,12 +462,12 @@ MAIN_PAGE_TEMPLATE = """
 </style>
 </head>
 <body>
-  <div class="header">
+  <!--header--><div class="header">
     <div class="title">__LOGO__<h2>__PLUGIN_NAME__</h2></div>
     <div class="header-actions">
       <button id="settings-btn" title="Settings &amp; about">Settings</button>
     </div>
-  </div>
+  </div><!--/header-->
   <div id="status">Loading...</div>
 
   <div class="filters">
@@ -491,8 +572,7 @@ MAIN_PAGE_TEMPLATE = """
       }
     }
 
-    // Matches how a spool missing this field (e.g. never used yet, for
-    // "last used") should sort: always to the end, not to the front on desc.
+    // A spool missing the field (e.g. never used) always sorts last, even descending.
     function compareSpools(a, b, key, dir) {
       const av = sortValue(a, key);
       const bv = sortValue(b, key);
@@ -753,7 +833,8 @@ SETTINGS_PAGE_TEMPLATE = """
 <meta charset="utf-8">
 <link rel="icon" href="__LOGODATA__">
 <style>
-  * { font-family: Roboto, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  * { font-family: __FONT__; }
+  html { overscroll-behavior-x: none; }
   html, body { height: 100%; }
   body {
     margin: 0; padding: 24px 28px; box-sizing: border-box; font-size: 13px;
@@ -766,14 +847,14 @@ SETTINGS_PAGE_TEMPLATE = """
     border-bottom: 1px solid var(--orca-border);
   }
   .header img.logo { width: 52px; height: 52px; flex-shrink: 0; }
-  h2 { margin: 0; font-size: 20px; font-weight: 700; color: var(--orca-accent); }
+  h2 { margin: 0; font-size: 20px; font-weight: 700; color: var(--orca-fg); }
   .step { display: flex; gap: 12px; margin-bottom: 16px; }
   .step-num {
     flex-shrink: 0; width: 22px; height: 22px; margin-top: 1px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     background: var(--orca-accent); color: var(--orca-accent-fg); font-size: 12px; font-weight: 700;
   }
-  .step h4 { margin: 0 0 3px 0; font-size: 14px; font-weight: 700; }
+  .step h4 { margin: 0 0 3px 0; font-size: 14px; font-weight: 700; color: var(--orca-accent); }
   .step p { margin: 0; color: var(--orca-muted); }
   .step strong { color: var(--orca-fg); }
   .divider { border-top: 1px solid var(--orca-border); margin: 4px 0 16px 0; }
@@ -804,13 +885,13 @@ SETTINGS_PAGE_TEMPLATE = """
     font-weight: 700; border: 1px solid transparent;
     background: transparent; color: var(--orca-fg);
   }
-  button.primary { background: var(--orca-accent); color: var(--orca-accent-fg); }
+  button.primary, button.test { background: var(--orca-accent); color: var(--orca-accent-fg); }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   .url-row { display: flex; gap: 8px; }
   .url-row input { flex: 1; min-width: 0; }
-  button.test { border-color: var(--orca-border); white-space: nowrap; }
+  button.test { white-space: nowrap; }
   .status.pending { color: var(--orca-muted); }
-  button.primary:hover { filter: brightness(1.08); }
+  button.primary:hover, button.test:hover { filter: brightness(1.08); }
   button.icon-btn { padding: 6px; line-height: 0; }
   button.link { padding: 0 0 0 6px; border: none; font-size: 11px; font-weight: 400; text-decoration: underline; }
   /* The host's own button:hover styling would otherwise repaint these; keep them static. */
@@ -824,14 +905,14 @@ SETTINGS_PAGE_TEMPLATE = """
 </style>
 </head>
 <body>
-  <div class="header">
+  <!--header--><div class="header">
     __LOGO__<h2>__PLUGIN_NAME__ Settings</h2>
     <button class="icon-btn" id="feedback" title="Send feedback or report a bug" aria-label="Send feedback">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
     </button>
-  </div>
+  </div><!--/header-->
 
-  <div class="step">
+  <!--steps--><div class="step">
     <div class="step-num">1</div>
     <div>
       <h4>Connect to Spoolman</h4>
@@ -846,29 +927,29 @@ SETTINGS_PAGE_TEMPLATE = """
       <p>Each card shows the filament color, remaining weight, and an RFID badge where a
       tag is linked. Filter, sort, or group the list by material, manufacturer, or location.</p>
     </div>
-  </div>
+  </div><!--/steps-->
   <div class="divider"></div>
 
-  <h3><span class="emoji">🛒</span>Configure Filament Reorder</h3>
+  <!--reorder--><h3><span class="emoji">🛒</span>Configure Filament Reorder</h3>
   <label for="low-stock" class="field-label">Low stock warning (grams):</label>
   <input id="low-stock" type="number" min="0" step="10" value="__LOW_STOCK__">
-  <div class="hint">Spools with this much filament remaining show a cart button for reordering.</div>
+  <div class="hint">Spools with this much filament remaining show a cart button for reordering.</div><!--/reorder-->
 
   <div class="divider spaced"></div>
 
-  <h3><span class="emoji">🔌</span>Configure Spoolman Server</h3>
+  <!--server--><h3><span class="emoji">🔌</span>Configure Spoolman Server</h3>
   <label for="url">Enter the URL of your self-hosted Spoolman server:</label>
   <div class="url-row">
     <input id="url" type="text" value="__URL__" placeholder="__DEFAULT_URL__">
     <button class="test" id="test">Test</button>
   </div>
-  <div class="status __STATUS_CLASS__" id="conn-status">__STATUS_TEXT__</div>
+  <div class="status __STATUS_CLASS__" id="conn-status">__STATUS_TEXT__</div><!--/server-->
 
-  <div class="about">
+  <!--about--><div class="about">
     <div class="logpath">Log file: __LOG_PATH__</div>
-  </div>
+  </div><!--/about-->
 
-  <div class="footer">
+  <!--footer--><div class="footer">
     <div class="version-row">
       <span>Plugin version __VERSION__</span>
       <button class="link" id="check-update">Check for updates</button>
@@ -876,7 +957,7 @@ SETTINGS_PAGE_TEMPLATE = """
     </div>
     <button id="cancel">Cancel</button>
     <button class="primary" id="save" disabled>Save &amp; Close</button>
-  </div>
+  </div><!--/footer-->
   <script>
     document.getElementById("cancel").addEventListener("click", function () {
       orca.postMessage({ type: "cancel" });
@@ -886,8 +967,8 @@ SETTINGS_PAGE_TEMPLATE = """
     const statusEl = document.getElementById("conn-status");
     const norm = function (u) { return u.trim().replace(/\\/+$/, ""); };
 
-    // Save stays disabled until the URL has passed a test; a saved URL that
-    // is already connected counts as passed so other settings can change alone.
+    // Save stays disabled until the URL passes a test. An already-connected saved URL
+    // counts as passed, so other settings can be changed on their own.
     let verifiedUrl = __VERIFIED_URL__;
     let verifiedText = statusEl.textContent;
 
@@ -954,7 +1035,7 @@ SETTINGS_PAGE_TEMPLATE = """
     });
 
     // Confirms the message listener above is registered before Python sends
-    // anything unprompted; see _on_settings_message's "ready" handler.
+    // anything unprompted; see _on_settings's "ready" handler.
     orca.postMessage({ type: "ready" });
 
     saveEl.addEventListener("click", function () {
@@ -969,23 +1050,21 @@ SETTINGS_PAGE_TEMPLATE = """
 """
 
 
-def render_page() -> str:
+def main_html() -> str:
     return _fill(
         MAIN_PAGE_TEMPLATE,
         LOGO=LOGO_IMG,
         LOGODATA=LOGO_DATA_URI,
+        FONT=FONT_STACK,
         PLUGIN_NAME=PLUGIN_NAME,
         LOW_STOCK_DEFAULT=DEFAULT_LOW_FILAMENT_THRESHOLD,
-        REFRESH_MS=REFRESH_INTERVAL_SECONDS * 1000,
+        REFRESH_MS=REFRESH_SECONDS * 1000,
     )
 
 
-def render_settings_dialog(current_url: str, spoolman_info: dict, low_stock_grams: float) -> str:
-    """Return the HTML for the Settings & About window.
-
-    ``spoolman_info`` describes the saved URL, not whatever is typed in the field.
-    """
-    verified_url = normalize_url(current_url) if spoolman_info.get("ok") else ""
+def settings_html(current_url: str, spoolman_info: dict, low_stock_grams: float) -> str:
+    """``spoolman_info`` describes the saved URL, not whatever is typed in the field."""
+    verified_url = clean_url(current_url) if spoolman_info.get("ok") else ""
     if spoolman_info.get("ok"):
         status_text = f"Connected - Spoolman v{spoolman_info['version']}"
         status_class = "ok"
@@ -999,6 +1078,7 @@ def render_settings_dialog(current_url: str, spoolman_info: dict, low_stock_gram
         SETTINGS_PAGE_TEMPLATE,
         LOGO=LOGO_IMG,
         LOGODATA=LOGO_DATA_URI,
+        FONT=FONT_STACK,
         PLUGIN_NAME=PLUGIN_NAME,
         VERSION=PLUGIN_VERSION,
         DEFAULT_URL=html.escape(DEFAULT_SPOOLMAN_URL),
@@ -1012,16 +1092,316 @@ def render_settings_dialog(current_url: str, spoolman_info: dict, low_stock_gram
     )
 
 
+def _split_page(page: str) -> tuple[str, str, str]:
+    def between(start: str, end: str, begin: int = 0) -> str:
+        a = page.index(start, begin) + len(start)
+        return page[a:page.index(end, a)]
+
+    body_start = page.index("<body>")
+    return (
+        between("<style>", "</style>"),
+        between("<body>", "<script>"),
+        between("<script>", "</script>", body_start),
+    )
+
+
+# The page templates wrap their sections in <!--name--> ... <!--/name--> markers, so the
+# tab can pull them apart and rearrange them.
+def _take_header(body: str) -> tuple[str, str]:
+    start = body.index("<!--header-->")
+    end = body.index("<!--/header-->") + len("<!--/header-->")
+    return body[:start] + body[end:], body[start:end]
+
+
+def _section(body: str, name: str) -> str:
+    start = body.index(f"<!--{name}-->") + len(f"<!--{name}-->")
+    return body[start:body.index(f"<!--/{name}-->")]
+
+
+def _hidden(condition: bool) -> str:
+    return "view-hidden" if condition else ""
+
+
+def _button(header: str, button_id: str) -> str:
+    return re.search(rf'<button[^>]*id="{button_id}".*?</button>', header, re.S).group(0)
+
+
+def _scope_css(css: str, root: str) -> str:
+    # Both pages style bare elements (body, button, h2...), so each page's rules are
+    # prefixed with its view's id to stop them leaking into the other view.
+    def scope(selector: str) -> str:
+        selector = selector.strip()
+        if selector == "*":
+            return f"{root}, {root} *"
+        if selector in ("html", "body"):
+            return root
+        for element in ("html ", "body "):
+            if selector.startswith(element):
+                return f"{root} {selector[len(element):]}"
+        return f"{root} {selector}"
+
+    def rule(match: re.Match) -> str:
+        selectors = ", ".join(scope(sel) for sel in match.group(2).split(","))
+        return f"{match.group(1)}{selectors} {{{match.group(3)}}}"
+
+    return re.sub(r"(\s*)([^{}]+?)\s*\{([^{}]*)\}", rule, css)
+
+
+# Pinned to the top and outside both views, so the logo and title never move when
+# switching. !important stops OrcaSlicer's own button styling repainting the buttons.
+TAB_HEADER_CSS = """
+  #app-header, #app-header * { font-family: __FONT__; }
+  #app-header {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100; height: 76px; box-sizing: border-box;
+    display: flex; align-items: center; gap: 12px; padding: 0 12px;
+    background: var(--orca-bg); border-bottom: 1px solid var(--orca-border);
+  }
+  #app-header img.logo { width: 52px; height: 52px; flex-shrink: 0; }
+  #app-header h2 {
+    flex: 1; min-width: 0; margin: 0; font-size: 20px; font-weight: 700; color: var(--orca-fg);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #app-header .header-actions { display: flex; flex-shrink: 0; }
+  #app-header button, #app-header button:hover, #app-header button:focus, #app-header button:active {
+    color: var(--orca-accent-fg) !important; background: var(--orca-accent) !important;
+    border: 1px solid var(--orca-accent) !important; box-shadow: none !important;
+    border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700;
+  }
+  #app-header #settings-btn { padding: 7px 16px; }
+  #app-header #feedback { padding: 6px; line-height: 0; }
+"""
+
+
+# Wide windows pair each setting with its guide in a grid, then a full-width diagnostics
+# row. Narrow windows stack the cells, guide first.
+TAB_SETTINGS_CSS = """
+  #view-settings { margin: 0 auto; }
+  #view-settings .settings-grid {
+    display: grid; grid-template-columns: minmax(0, 9fr) minmax(0, 11fr);
+  }
+  #view-settings .cell { padding: 14px 0; }
+  /* Fixed heading height, content centred: paired headings stay level whatever the emoji size. */
+  #view-settings .cell h3 { display: flex; align-items: center; height: 30px; }
+  #view-settings .cell-server, #view-settings .cell-reorder { grid-column: 1; padding-right: 32px; }
+  #view-settings .cell-guide, #view-settings .cell-preview { grid-column: 2; padding-left: 32px; }
+  #view-settings .cell-server, #view-settings .cell-guide { grid-row: 1; padding-top: 0; }
+  #view-settings .cell-reorder, #view-settings .cell-preview { grid-row: 2; }
+  #view-settings .cell-diag { grid-column: 1 / -1; grid-row: 3; padding-bottom: 0; }
+  #view-settings .footer { border-top: none; }
+  #view-settings .cell-guide h3 { margin-bottom: 16px; }
+  #view-settings .cell-guide .step:last-child { margin-bottom: 0; }
+  #view-settings .cell-diag .about { margin-top: 0; }
+  #view-settings .about .version-row { margin-bottom: 8px; }
+  #view-settings .preview {
+    padding: 14px 16px; border: 1px solid var(--orca-border); border-radius: 10px;
+    background: var(--orca-border);
+    background: color-mix(in srgb, var(--orca-fg) 5%, var(--orca-bg) 95%);
+  }
+  #view-settings .preview-count { font-weight: 700; }
+  #view-settings .preview-list { list-style: none; margin: 8px 0 0; padding: 0; }
+  #view-settings .preview-list li {
+    display: flex; justify-content: space-between; gap: 12px;
+    padding: 6px 0; border-top: 1px solid var(--orca-border);
+  }
+  #view-settings .preview-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #view-settings .preview-weight { flex-shrink: 0; color: #e0a030; }
+  #view-settings .preview-note { color: var(--orca-muted); }
+  #view-settings .preview-list:not(:empty) + .preview-note:not(:empty) { margin-top: 6px; }
+  @media (max-width: 900px) {
+    #view-settings .settings-grid { grid-template-columns: minmax(0, 1fr); }
+    #view-settings .cell { grid-column: auto; grid-row: auto; padding: 14px 0; }
+    #view-settings .cell-guide { order: -1; padding-top: 0; }
+  }
+"""
+
+TAB_PREVIEW_HTML = """
+    <h3><span class="emoji">📦</span>Filament Reorder Preview</h3>
+    <div class="preview" aria-live="polite">
+      <div class="preview-count" id="preview-count"></div>
+      <ul class="preview-list" id="preview-list"></ul>
+      <div class="preview-note" id="preview-note"></div>
+    </div>
+"""
+
+# Reads the spool list the main view already receives, so the preview needs no requests.
+TAB_PREVIEW_SCRIPT = """
+  var input = document.getElementById("low-stock");
+  var countEl = document.getElementById("preview-count");
+  var listEl = document.getElementById("preview-list");
+  var noteEl = document.getElementById("preview-note");
+  var MAX_LISTED = 5;
+  var spools = null;
+
+  function formatWeight(grams) {
+    return Math.abs(grams) >= 1000 ? (grams / 1000).toFixed(2) + " kg" : Math.round(grams) + " g";
+  }
+
+  function update() {
+    var grams = parseFloat(input.value);
+    listEl.innerHTML = "";
+    countEl.textContent = "";
+    noteEl.textContent = "";
+    if (spools === null) {
+      noteEl.textContent = "Connect to Spoolman to preview which spools would trigger a reorder.";
+      return;
+    }
+    if (!(grams >= 0)) {
+      noteEl.textContent = "Enter a weight in grams to preview.";
+      return;
+    }
+    // Same rule the spool cards use for the reorder cart.
+    var low = spools.filter(function (s) {
+      return typeof s.remaining_weight === "number" && s.remaining_weight < grams;
+    }).sort(function (a, b) { return a.remaining_weight - b.remaining_weight; });
+    countEl.textContent = (low.length || "No") + (low.length === 1 ? " spool is" : " spools are") +
+      " under " + grams + " g";
+    low.slice(0, MAX_LISTED).forEach(function (s) {
+      var item = document.createElement("li");
+      var name = document.createElement("span");
+      var weight = document.createElement("span");
+      name.className = "preview-name";
+      name.textContent = (s.filament && s.filament.name) || ("Spool #" + s.id);
+      weight.className = "preview-weight";
+      weight.textContent = formatWeight(s.remaining_weight);
+      item.appendChild(name);
+      item.appendChild(weight);
+      listEl.appendChild(item);
+    });
+    if (low.length > MAX_LISTED) noteEl.textContent = "+ " + (low.length - MAX_LISTED) + " more";
+  }
+
+  input.addEventListener("input", update);
+  bridge.onMessage(function (data) {
+    if (!data) return;
+    if (data.type === "spools") {
+      spools = data.ok ? (data.spools || []) : null;
+      update();
+    } else if (data.type === "show_view" && data.view === "settings") {
+      update();
+    }
+  });
+  update();
+"""
+
+
+# Loaded before either view's script. Each view gets its own `orca` object: the
+# settings view tags what it sends (both views send "ready"), and a single real
+# onMessage handler fans incoming messages out to both views.
+TAB_BRIDGE_SCRIPT = """
+(function () {
+  var host = window.orca;
+  var handlers = [];
+  host.onMessage(function (data) {
+    handlers.forEach(function (handler) {
+      try { handler(data); } catch (err) { console.error(err); }
+    });
+  });
+  function bridge(tag) {
+    return {
+      postMessage: function (message) {
+        host.postMessage(tag ? Object.assign({}, message, { view: tag }) : message);
+      },
+      onMessage: function (handler) { handlers.push(handler); },
+    };
+  }
+  window.__spoolio = { main: bridge(null), settings: bridge("settings") };
+
+  handlers.push(function (data) {
+    if (!data || data.type !== "show_view") return;
+    var settings = data.view === "settings";
+    document.getElementById("view-main").classList.toggle("view-hidden", settings);
+    document.getElementById("view-settings").classList.toggle("view-hidden", !settings);
+    document.getElementById("actions-main").classList.toggle("view-hidden", settings);
+    document.getElementById("actions-settings").classList.toggle("view-hidden", !settings);
+    document.getElementById("title-suffix").classList.toggle("view-hidden", !settings);
+    if (!settings) return;
+    // Reset the form to the saved values each time Settings is opened, so
+    // edits abandoned with Cancel don't linger.
+    var url = document.getElementById("url");
+    url.value = data.url || url.placeholder;
+    url.dispatchEvent(new Event("input"));
+    document.getElementById("low-stock").value = data.low_stock;
+    document.getElementById("update-status").textContent = "";
+  });
+})();
+"""
+
+
+def tab_html(initial_view: str, current_url: str, low_stock_grams: float) -> str:
+    """The spool list and Settings as two views of one page, under a shared header.
+
+    Built from the standalone pages, which SpoolioWindow still shows as separate windows.
+    """
+    main_css, main_body, main_js = _split_page(main_html())
+    settings_css, settings_body, settings_js = _split_page(settings_html(
+        current_url, {"ok": False, "pending": True}, low_stock_grams,
+    ))
+    main_body, main_header = _take_header(main_body)
+    settings_body, settings_header = _take_header(settings_body)
+    on_main = initial_view == "main"
+    settings_button = _button(main_header, "settings-btn")
+    feedback_button = _button(settings_header, "feedback")
+    steps, reorder = _section(settings_body, "steps"), _section(settings_body, "reorder")
+    server, about = _section(settings_body, "server"), _section(settings_body, "about")
+    footer = _section(settings_body, "footer")
+    # The version and update check move out of the footer into the Diagnostics section.
+    version_row = re.search(r'<div class="version-row">.*?</div>', footer, re.S).group(0)
+    footer = footer.replace(version_row, "")
+    about = about.replace('<div class="logpath">', version_row + '<div class="logpath">', 1)
+    wrench = "\U0001F6E0\uFE0F"
+    settings_view = f"""<div class="settings-grid">
+  <div class="cell cell-server">{server}</div>
+  <div class="cell cell-guide"><h3><span class="emoji">🚀</span>Getting Started</h3>{steps}</div>
+  <div class="cell cell-reorder">{reorder}</div>
+  <div class="cell cell-preview">{TAB_PREVIEW_HTML}</div>
+  <div class="cell cell-diag"><h3><span class="emoji">{wrench}</span>Diagnostics</h3>{about}</div>
+</div>
+{footer}"""
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="{LOGO_DATA_URI}">
+<style>
+  html, body {{ height: 100%; margin: 0; background: var(--orca-bg); overscroll-behavior-x: none; }}
+  body {{ box-sizing: border-box; padding-top: 76px; }}
+  .view-hidden {{ display: none !important; }}
+  #view-settings {{ min-height: 100%; max-width: 1100px; }}
+{_fill(TAB_HEADER_CSS, FONT=FONT_STACK)}
+{_scope_css(main_css, "#view-main")}
+{_scope_css(settings_css, "#view-settings")}
+{TAB_SETTINGS_CSS}
+</style>
+</head>
+<body>
+<div id="app-header">
+  {LOGO_IMG}<h2>{PLUGIN_NAME}<span id="title-suffix" class="{_hidden(on_main)}"> Settings</span></h2>
+  <div class="header-actions">
+    <span id="actions-main" class="{_hidden(not on_main)}">{settings_button}</span>
+    <span id="actions-settings" class="{_hidden(on_main)}">{feedback_button}</span>
+  </div>
+</div>
+<div id="view-main" class="view {_hidden(not on_main)}">{main_body}</div>
+<div id="view-settings" class="view {_hidden(on_main)}">{settings_view}</div>
+<script>{TAB_BRIDGE_SCRIPT}</script>
+<script>(function (orca) {{{main_js}}})(window.__spoolio.main);</script>
+<script>(function (orca) {{{settings_js}}})(window.__spoolio.settings);</script>
+<script>(function (bridge) {{{TAB_PREVIEW_SCRIPT}}})(window.__spoolio.settings);</script>
+</body>
+</html>
+"""
+
+
 class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
     def __init__(self):
         super().__init__()
         self._panel = None
         self._settings_window = None
         self._verified_url = ""
-        self._latest_release_url = ""
-        self._refresh_in_flight = False
-        self._test_in_flight = False
-        self._update_check_in_flight = False
+        self._release_url = ""
+        self._refreshing = False
+        self._testing = False
+        self._checking_update = False
 
     def get_name(self):
         return PLUGIN_NAME
@@ -1043,16 +1423,16 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
         )
         return False
 
-    def _settings_saved(self):
+    def _after_save(self):
         self._open_panel()
         self._push_data()
 
-    def _open_settings_window(self):
+    def _open_settings(self):
         if self._settings_window is not None and self._settings_window.is_open():
             return
         saved_url = self._spoolman_url()
         self._settings_window = orca.host.ui.create_window(
-            html=render_settings_dialog(
+            html=settings_html(
                 saved_url,
                 spoolman_info={"ok": False, "pending": True},
                 low_stock_grams=parse_low_stock(get_settings().get("low_stock_grams")),
@@ -1060,26 +1440,26 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
             title=f"{PLUGIN_NAME} - Settings & About",
             width=SETTINGS_WINDOW_SIZE[0],
             height=SETTINGS_WINDOW_SIZE[1],
-            on_message=self._on_settings_message,
+            on_message=self._on_settings,
             on_close=self._on_settings_close,
         )
 
     def _check_connection(self, url, window):
-        if self._test_in_flight:
+        if self._testing:
             return
-        self._test_in_flight = True
+        self._testing = True
 
         def worker():
-            info = fetch_spoolman_info(url)
-            self._test_in_flight = False
+            info = ping_spoolman(url)
+            self._testing = False
             if info.get("ok"):
-                self._verified_url = normalize_url(url)
+                self._verified_url = clean_url(url)
             if window.is_open():
                 window.post({"type": "test_result", "url": url, **info})
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_settings_message(self, data):
+    def _on_settings(self, data):
         msg_type = data.get("type") if isinstance(data, dict) else None
         if msg_type == "ready":
             # Only check the connection once the page confirms its message
@@ -1093,7 +1473,7 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
         elif msg_type == "save":
             # The page already gates Save; enforce it here too.
             url = (data.get("url") or "").strip()
-            if normalize_url(url) != self._verified_url:
+            if clean_url(url) != self._verified_url:
                 if self._settings_window is not None:
                     self._settings_window.post({
                         "type": "test_result",
@@ -1103,29 +1483,29 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
                     })
                 return
             if self._save_settings(url, data.get("low_stock")):
-                self._settings_saved()
+                self._after_save()
                 if self._settings_window is not None:
                     self._settings_window.close()
         elif msg_type == "feedback":
-            self._open_url(FEEDBACK_URL)
+            open_url(FEEDBACK_URL)
         elif msg_type == "check_update":
-            if self._update_check_in_flight or self._settings_window is None:
+            if self._checking_update or self._settings_window is None:
                 return
-            self._update_check_in_flight = True
+            self._checking_update = True
             window = self._settings_window
 
             def worker():
-                result = fetch_latest_release()
-                self._update_check_in_flight = False
+                result = latest_release()
+                self._checking_update = False
                 if result["ok"]:
-                    self._latest_release_url = result["url"]
+                    self._release_url = result["url"]
                     result["newer"] = is_newer(result["version"], PLUGIN_VERSION)
                 if window.is_open():
                     window.post({"type": "update_result", **result})
 
             threading.Thread(target=worker, daemon=True).start()
-        elif msg_type == "release" and self._latest_release_url.startswith("https://"):
-            self._open_url(self._latest_release_url)
+        elif msg_type == "release" and self._release_url.startswith("https://"):
+            open_url(self._release_url)
         elif msg_type == "cancel" and self._settings_window is not None:
             self._settings_window.close()
 
@@ -1145,25 +1525,9 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
         if msg_type in ("ready", "refresh"):
             self._push_data()
         elif msg_type == "settings":
-            self._open_settings_window()
+            self._open_settings()
         elif msg_type == "order":
-            self._open_search(data.get("query"))
-
-    def _open_search(self, query):
-        if not isinstance(query, str) or not query.strip():
-            return
-        terms = urllib.parse.quote_plus(query.strip()[:MAX_QUERY_LENGTH])
-        self._open_url(SEARCH_URL.format(query=terms))
-
-    def _open_url(self, url):
-        log.info("Opening %s", url)
-        try:
-            webbrowser.open(url)
-        except Exception as exc:
-            log.exception("Could not open the browser")
-            orca.host.ui.message(
-                f"Could not open the browser: {exc}", title=PLUGIN_NAME, icon="error"
-            )
+            open_search(data.get("query"))
 
     def _push_data(self):
         if self._panel is None or not self._panel.is_open():
@@ -1176,15 +1540,15 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
                 "error": "No Spoolman URL configured yet - click Settings to set one.",
             })
             return
-        if self._refresh_in_flight:
+        if self._refreshing:
             return
-        self._refresh_in_flight = True
+        self._refreshing = True
         panel = self._panel
         low_stock_grams = parse_low_stock(get_settings().get("low_stock_grams"))
 
         def worker():
-            result = fetch_spools(url)
-            self._refresh_in_flight = False
+            result = get_spools(url)
+            self._refreshing = False
             if panel.is_open():
                 panel.post({"type": "spools", "low_stock_grams": low_stock_grams, **result})
 
@@ -1198,7 +1562,7 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
             self._push_data()
             return
         self._panel = orca.host.ui.create_window(
-            html=render_page(),
+            html=main_html(),
             title=PLUGIN_NAME,
             width=MAIN_WINDOW_SIZE[0],
             height=MAIN_WINDOW_SIZE[1],
@@ -1208,12 +1572,11 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
 
     def _open(self):
         if not self._spoolman_url():
-            self._open_settings_window()
+            self._open_settings()
             return
         self._open_panel()
 
     def on_load(self):
-        setup_logging()
         log.info(
             "%s %s loaded (Python %s, %s)",
             PLUGIN_NAME,
@@ -1228,7 +1591,212 @@ class SpoolioWindow(orca.script.ScriptPluginCapabilityBase):
         return orca.ExecutionResult.success(f"Opened {PLUGIN_NAME}")
 
 
+
+class _SettingsView:
+    """Stands in for a settings window when Settings is a view inside the tab.
+
+    Same post / is_open / close calls as a host window, so the settings code is shared.
+    """
+
+    def __init__(self, page):
+        self._page = page
+
+    def post(self, data):
+        self._page.post_message({**data, "view": "settings"})
+
+    def is_open(self):
+        return True
+
+    def close(self):
+        self._page.post_message({"type": "show_view", "view": "main"})
+
+
+if HAS_PAGES:
+
+    class SpoolioPage(orca.pages.PagesPluginCapabilityBase):
+        """The Spoolio tab, with Settings as a second view inside it.
+
+        Used instead of SpoolioWindow when orca.pages exists. Its settings methods duplicate
+        SpoolioWindow's rather than share a mixin, to avoid multiple inheritance with a
+        pybind11 base class.
+        """
+
+        def __init__(self):
+            super().__init__()
+            self._settings_window = _SettingsView(self)
+            self._verified_url = ""
+            self._release_url = ""
+            self._refreshing = False
+            self._testing = False
+            self._checking_update = False
+
+        def get_name(self):
+            return PLUGIN_NAME
+
+        def get_type(self):
+            return orca.PluginType.Pages
+
+        def get_icon(self):
+            return icon_path()
+
+        def get_ui(self):
+            try:
+                url = self._spoolman_url()
+                return tab_html(
+                    initial_view="main" if url else "settings",
+                    current_url=url,
+                    low_stock_grams=parse_low_stock(get_settings().get("low_stock_grams")),
+                )
+            except Exception:
+                log.exception("get_ui() raised")
+                raise
+
+        def on_message(self, arg0):
+            # The base class hints "arg0: str", but a parsed dict arrives (as with
+            # create_window). A string is still accepted in case that changes.
+            try:
+                data = json.loads(arg0) if isinstance(arg0, str) else arg0
+                if not isinstance(data, dict):
+                    return
+                if data.get("view") == "settings":
+                    self._on_settings(data)
+                    return
+                msg_type = data.get("type")
+                if msg_type in ("ready", "refresh"):
+                    self._push_data()
+                elif msg_type == "settings":
+                    self._open_settings()
+                elif msg_type == "order":
+                    open_search(data.get("query"))
+            except Exception:
+                log.exception("on_message() raised (arg0=%r)", arg0)
+
+        def _spoolman_url(self):
+            return get_settings().get("spoolman_url", "")
+
+        def _push_data(self):
+            url = self._spoolman_url()
+            if not url:
+                self.post_message({
+                    "type": "spools",
+                    "ok": False,
+                    "error": "No Spoolman URL configured yet - click Settings to set one.",
+                })
+                return
+            if self._refreshing:
+                return
+            self._refreshing = True
+            low_stock_grams = parse_low_stock(get_settings().get("low_stock_grams"))
+
+            def worker():
+                result = get_spools(url)
+                self._refreshing = False
+                self.post_message({"type": "spools", "low_stock_grams": low_stock_grams, **result})
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _save_settings(self, url, low_stock):
+            settings = get_settings()
+            settings["spoolman_url"] = url
+            settings["low_stock_grams"] = parse_low_stock(low_stock)
+            if save_settings(settings):
+                log.info("Settings saved (url=%s, low stock=%s g)", url,
+                         settings["low_stock_grams"])
+                return True
+            orca.host.ui.message(
+                f"Could not write settings to {SETTINGS_FILE}. Check that this folder is writable.",
+                title=PLUGIN_NAME,
+                icon="error",
+            )
+            return False
+
+        def _after_save(self):
+            self._push_data()
+
+        def _open_settings(self):
+            saved_url = self._spoolman_url()
+            self.post_message({
+                "type": "show_view",
+                "view": "settings",
+                "url": saved_url,
+                "low_stock": parse_low_stock(get_settings().get("low_stock_grams")),
+            })
+            self._check_connection(saved_url, self._settings_window)
+
+        def _check_connection(self, url, window):
+            if self._testing:
+                return
+            self._testing = True
+
+            def worker():
+                info = ping_spoolman(url)
+                self._testing = False
+                if info.get("ok"):
+                    self._verified_url = clean_url(url)
+                if window.is_open():
+                    window.post({"type": "test_result", "url": url, **info})
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def _on_settings(self, data):
+            msg_type = data.get("type")
+            if msg_type == "ready":
+                self._check_connection(self._spoolman_url(), self._settings_window)
+            elif msg_type == "test":
+                url = (data.get("url") or "").strip()
+                self._check_connection(url, self._settings_window)
+            elif msg_type == "save":
+                url = (data.get("url") or "").strip()
+                if clean_url(url) != self._verified_url:
+                    self._settings_window.post({
+                        "type": "test_result",
+                        "ok": False,
+                        "url": url,
+                        "error": "Test the connection successfully before saving.",
+                    })
+                    return
+                if self._save_settings(url, data.get("low_stock")):
+                    self._after_save()
+                    self._settings_window.close()
+            elif msg_type == "feedback":
+                open_url(FEEDBACK_URL)
+            elif msg_type == "check_update":
+                if self._checking_update:
+                    return
+                self._checking_update = True
+                window = self._settings_window
+
+                def worker():
+                    result = latest_release()
+                    self._checking_update = False
+                    if result["ok"]:
+                        self._release_url = result["url"]
+                        result["newer"] = is_newer(result["version"], PLUGIN_VERSION)
+                    window.post({"type": "update_result", **result})
+
+                threading.Thread(target=worker, daemon=True).start()
+            elif msg_type == "release" and self._release_url.startswith("https://"):
+                open_url(self._release_url)
+            elif msg_type == "cancel":
+                self._settings_window.close()
+
+        def on_load(self):
+            log.info(
+                "%s %s loaded as a native tab (Python %s, %s)",
+                PLUGIN_NAME,
+                PLUGIN_VERSION,
+                platform.python_version(),
+                platform.platform(),
+            )
+
+        def on_unload(self):
+            log.info("Unloading")
+
+
 @orca.plugin
 class SpoolioPlugin(orca.base):
     def register_capabilities(self):
-        orca.register_capability(SpoolioWindow)
+        if HAS_PAGES:
+            orca.register_capability(SpoolioPage)
+        else:
+            orca.register_capability(SpoolioWindow)

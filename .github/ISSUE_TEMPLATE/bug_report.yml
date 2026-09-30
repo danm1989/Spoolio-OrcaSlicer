@@ -39,10 +39,10 @@ body:
     id: spoolman
     attributes:
       label: Spoolman version
-      placeholder: "shown on the plugin's Settings & About page"
+      placeholder: "shown on the plugin's Settings page"
   - type: textarea
     id: logs
     attributes:
       label: Log output
-      description: Paste the end of spoolio.log (its path is shown at the bottom of the plugin's Settings & About page). Also useful - the plugin's Diagnostics tab in OrcaSlicer.
+      description: Paste the end of spoolio.log (its path is shown at the bottom of the plugin's Settings page). Also useful - the plugin's Diagnostics tab in OrcaSlicer.
       render: text

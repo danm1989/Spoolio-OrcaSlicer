@@ -2,7 +2,7 @@
 """Fail if the plugin's two version numbers disagree, or don't match a release tag.
 
     python scripts/check_version.py            # consistency only
-    python scripts/check_version.py v0.1.0     # also require the tag to match
+    python scripts/check_version.py v0.2.0     # also require the tag to match
 """
 
 import re

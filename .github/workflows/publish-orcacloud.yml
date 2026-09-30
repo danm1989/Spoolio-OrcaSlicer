@@ -2,7 +2,7 @@ name: Publish to OrcaCloud
 
 # Runs when a GitHub release is published. Nothing happens until you:
 #   1. Create the plugin on Orca Cloud and connect this repo under
-#      Edit plugin, and
+#      Edit plugin > GitHub publishing, and
 #   2. Set the repository variable ORCACLOUD_PUBLISH to "true"
 #      (Settings > Secrets and variables > Actions > Variables).
 
@@ -16,7 +16,7 @@ permissions:
 
 env:
   # Space-separated globs of the plugin files to upload (.whl / .py).
-  PLUGIN_FILES: "plugin/spoolio/spoolio_any.py"
+  PLUGIN_FILES: "dist/*.py"
 
 jobs:
   publish:
@@ -30,6 +30,9 @@ jobs:
 
       - name: Check the tag matches the plugin version
         run: python scripts/check_version.py "$GITHUB_REF_NAME"
+
+      - name: Build the plugin for every OS
+        run: python scripts/build.py
 
       - name: Publish release to OrcaCloud
         run: |

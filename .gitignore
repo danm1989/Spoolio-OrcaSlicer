@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+# Build output (regenerate with: python scripts/build.py)
+dist/
+
 # User settings and logs written by a locally installed plugin
 spoolio_settings.json
 *.log

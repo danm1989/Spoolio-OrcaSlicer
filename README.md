@@ -12,13 +12,14 @@ Spoolio _(Spool Inventory Overview)_ is a Bambu Lab inspired filament inventory 
 This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https://github.com/Rdiger-36/bambulab-ams-spoolman-filamentstatus) which tracks your filament usage and automatically updates Spoolman.  
 
 ## Key Features
+- **Native OrcaSlicer tab:** Spoolio sits in the top bar next to Prepare, Preview and Device, with Settings as a second page inside it.
 - **Spool cards:** Showing colour, vendor, remaining weight, a progress bar in the spool's own colour and material / colour hex / diameter details.
 - **RFID badge:** On spools that have a tag linked in Spoolman (requires Spoolman v.0.27.0 or newer).
 - **Filter, sort and group:** By material, manufacturer or location.
 - **Low-stock reorder button:** Spools under the user defined threshold will generate a cart icon on the card that opens a web search for reordering (either by a user input Spoolman article no. or it defaults to the filament name)
 - **Guided settings:** With a connection test before your Spoolman address can be saved.
 - Matches OrcaSlicer's **light and dark theming**.
-- Works on **Windows, macOS and Linux** (x86_64 and arm64) with a single file.
+- Built for **Windows, macOS and Linux** (x86_64 and arm64).
 
 ## Images
 
@@ -30,7 +31,7 @@ This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https:/
 
 ## Requirements
 
-- A current OrcaSlicer **nightly build** (tested on build dev.2.5.0 [93b58a20] and confirmed as working).
+- A current OrcaSlicer **nightly build** (tested on build dev.2.5.0 [93b58a20] and confirmed as working). The Spoolio tab needs a build with the Pages plugin type; on builds without it Spoolio opens as a floating window instead.
 - A self-hosted Spoolman server (v0.27.0 or newer required to show RFID tags).
 
 ## Install
@@ -38,33 +39,41 @@ This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https:/
 **From Orca Cloud:** subscribe to Spoolio in the Plugin Hub, then in
 OrcaSlicer open ***File > Plugins***, click ***Refresh*** and tick ***Activate***.
 
-**Manually:** download `spoolio_any.py` from the [latest release](../../releases/latest) and place it in
-its own folder called `spoolio` inside OrcaSlicer's plugin directory:
+**Manually:** download the file for your system from the [latest release](../../releases/latest):
+
+| System | File |
+|---|---|
+| Windows (x86_64) | `spoolio_win_x86_64.py` |
+| Windows (arm64) | `spoolio_win_arm64.py` |
+| Linux (x86_64) | `spoolio_linux_x86_64.py` |
+| Linux (arm64) | `spoolio_linux_arm64.py` |
+| macOS (Apple silicon) | `spoolio_macosx_arm64.py` |
+| macOS (Intel) | `spoolio_macosx_x86_64.py` |
+
+Place it in its own folder called `spoolio` inside OrcaSlicer's plugin directory (one Spoolio file per folder):
 
 | OS | Plugin directory |
 |---|---|
-| Windows | `%APPDATA%\Roaming\OrcaSlicer\orca_plugins\` |
+| Windows | `%APPDATA%\OrcaSlicer\orca_plugins\` |
 | macOS | `~/Library/Application Support/OrcaSlicer/orca_plugins/` |
 | Linux | `~/.config/OrcaSlicer/orca_plugins/` |
 
-Restart OrcaSlicer, then tick ***Activate*** for Spoolio.
+Restart OrcaSlicer, then tick ***Activate*** for Spoolio. A **Spoolio** tab appears in the top bar.
 
 ## Set Up
 
-The Settings & About page opens on first run. Enter your Spoolman server address (for example `http://raspberrypi.local:7912`), 
-click ***Test***, once the connection is confirmed then ***Save & Close***. You can also set the low-stock threshold here, and 
+The Spoolio tab opens on its Settings page on first run. Enter your Spoolman server address (for example `http://raspberrypi.local:7912`), 
+click ***Test***, once the connection is confirmed then ***Save & Close***, which takes you back to your spool list. You can also set the low-stock threshold here, and 
 reopen the page any time with the ***Settings*** button.
 
 OrcaSlicer asks before a plugin does anything sensitive. Expect a prompt the first time the plugin connects to Spoolman, 
 and another the first time you click a reorder cart to open your browser.
 
-## Feedback and Contributing
+## Feedback
 
 Encounter a problem or have an idea? Please
 [report a bug](../../issues/new?template=bug_report.yml) or
 [request a new feature](../../issues/new?template=feature_request.yml).
-
-Pull requests are welcome - see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 

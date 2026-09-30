@@ -27,6 +27,8 @@ jobs:
           python-version: "3.12"
       - name: Check version numbers agree
         run: python scripts/check_version.py
+      - name: Build the per-OS plugin files
+        run: python scripts/build.py
 
   lint:
     name: Lint
