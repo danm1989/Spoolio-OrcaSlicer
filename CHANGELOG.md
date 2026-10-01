@@ -2,10 +2,10 @@
 
 ## [0.2.0] - 2026-10-01
 
-Spoolio now has its own tab in OrcaSlicer's top bar, and is built separately for each operating system.
+Spoolio now has its own tab in OrcaSlicer's top bar, and is built separately for all OS.
 
 ### Added
-- **A Spoolio tab** next to Prepare, Preview and Device. Spoolio has migrated to OrcaSlicer's Pages window from the previous floating window method, and still falls back to the floating window on builds without Pages support.
+- **A Spoolio tab** Spoolio has migrated to OrcaSlicer's Pages window from the previous floating window method, and still falls back to the floating window on builds without Pages support.
 - **Settings inside the tab** as a second page instead of a separate window. Save & Close or Cancel returns to the spool list, and Settings still opens first on first run.
 - **Filament Reorder Preview** on the Settings page, showing which spools would get a reorder cart at the low-stock level you type in.
 - **A Diagnostics section** with the plugin version, a Check for updates link and the path of the new log file (`spoolio.log`) to attach to bug reports, plus a **feedback button** on the Settings page.
