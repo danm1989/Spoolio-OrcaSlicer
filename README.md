@@ -12,7 +12,6 @@ Spoolio _(Spool Inventory Overview)_ is a Bambu Lab inspired filament inventory 
 This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https://github.com/Rdiger-36/bambulab-ams-spoolman-filamentstatus) which tracks your filament usage and automatically updates Spoolman.  
 
 ## Key Features
-- **Native OrcaSlicer tab:** Spoolio sits in the top bar next to Prepare, Preview and Device, with Settings as a second page inside it.
 - **Spool cards:** Showing colour, vendor, remaining weight, a progress bar in the spool's own colour and material / colour hex / diameter details.
 - **RFID badge:** On spools that have a tag linked in Spoolman (requires Spoolman v.0.27.0 or newer).
 - **Filter, sort and group:** By material, manufacturer or location.
@@ -24,10 +23,10 @@ This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https:/
 ## Images
 
 <p align="center">
-  <img src="assets/spoolio-spool-list.png" alt="Spoolio spool list inside OrcaSlicer" width="800">
+  <img src="assets/spoolio-spool-list.png" alt="Spoolio spool list" width="800">
 </p>
 <p align="center">
-  <img src="assets/spoolio-settings-page.png" alt="Spoolio settings page with the filament reorder preview" width="800">
+  <img src="assets/spoolio-settings-page.png" alt="Spoolio settings page" width="800">
 </p>
 
 ## Requirements
