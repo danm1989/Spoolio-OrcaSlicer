@@ -9,7 +9,7 @@ Spoolio _(Spool Inventory Overview)_ is a Bambu Lab inspired filament inventory 
 > [!IMPORTANT]
 > Spoolio ***<ins>is not</ins>*** a filament profile manager (nozzle temps, flow ratios, pressure advance etc) those settings are configured in your filament profiles within OrcaSlicer.  If you're looking for a tool that covers this then I would recommend [PipSpool](https://github.com/Gadonk/pipspool-orcaslicer) or [FilamentHub](https://github.com/WeLizard/FilamentHub). 
 
-This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https://github.com/Rdiger-36/bambulab-ams-spoolman-filamentstatus) which tracks your filament usage and automatically updates Spoolman.  
+This plugin is best used in parallel with [HaspelSync](https://github.com/Rdiger-36/HaspelSync) which tracks your filament usage and automatically updates Spoolman.  
 
 ## Key Features
 - **Spool cards:** Showing colour, vendor, remaining weight, a progress bar in the spool's own colour and material / colour hex / diameter details.
