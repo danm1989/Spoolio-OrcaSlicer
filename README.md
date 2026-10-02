@@ -24,9 +24,10 @@ This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https:/
 ## Images
 
 <p align="center">
-  <img src="assets/spoolio-cards.png" alt="Spoolio spool cards" width="220">
-  <img src="assets/spoolio-cart.png" alt="Spoolio low-stock reorder cart" width="220">
-  <img src="assets/spoolio-settings.png" alt="Spoolio Settings page" width="220">
+  <img src="assets/spoolio-spool-list.png" alt="Spoolio spool list inside OrcaSlicer" width="800">
+</p>
+<p align="center">
+  <img src="assets/spoolio-settings-page.png" alt="Spoolio settings page with the filament reorder preview" width="800">
 </p>
 
 ## Requirements
