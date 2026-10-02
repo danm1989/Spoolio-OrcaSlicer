@@ -31,7 +31,7 @@ This plugin is best used in parallel with [BambuLab AMS Spoolman Status](https:/
 
 ## Requirements
 
-- A current OrcaSlicer **nightly build** (tested on build dev.2.5.0 [93b58a20] and confirmed as working). The Spoolio tab needs a build with the Pages plugin type; on builds without it Spoolio opens as a floating window instead.
+- A current OrcaSlicer **nightly build** (tested on 2.5.0-dev Build 97700c5a and confirmed as working).
 - A self-hosted Spoolman server (v0.27.0 or newer required to show RFID tags).
 
 ## Install
@@ -66,8 +66,7 @@ The Spoolio tab opens on its Settings page on first run. Enter your Spoolman ser
 click ***Test***, once the connection is confirmed then ***Save & Close***, which takes you back to your spool list. You can also set the low-stock threshold here, and 
 reopen the page any time with the ***Settings*** button.
 
-OrcaSlicer asks before a plugin does anything sensitive. Expect a prompt the first time the plugin connects to Spoolman, 
-and another the first time you click a reorder cart to open your browser.
+OrcaSlicer asks before a plugin does anything sensitive. Expect a prompt the first time the plugin connects to Spoolman, and another the first time you click a reorder cart to open your browser.
 
 ## Feedback
 
@@ -77,14 +76,12 @@ Encounter a problem or have an idea? Please
 
 ## Acknowledgements
 
-- [**Spoolman**](https://github.com/Donkie/Spoolman) by Donkie and contributors,
-  the filament inventory server this plugin reads from.
+- [**Spoolman**](https://github.com/Donkie/Spoolman) by Donkie and contributors.
 - [**OrcaSlicer**](https://github.com/OrcaSlicer/OrcaSlicer) by SoftFever and
-  contributors, for the Python plugin system this is built on.
+  contributors.
 - The **Bambu Handy** app, whose spool cards inspired the design.
 
-This is an independent community project, not affiliated with or endorsed by
-Spoolman, OrcaSlicer or Bambu Lab.
+This is an independent project and is not affiliated with or endorsed by Spoolman, OrcaSlicer or Bambu Lab.
 
 ## License
 
